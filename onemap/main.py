@@ -45,6 +45,21 @@ class OneMapAPI:
             )
         return self._headers
 
+    def reverse_search(self, x_coord: float, y_coord: float) -> list[dict[str, Any]]:
+        """
+        Reverse search for an address using coordinates.
+        """
+        url = f"https://www.onemap.gov.sg/api/public/revgeocodexy?location={x_coord}%2C{y_coord}&buffer=40&addressType=All&otherFeatures=N"
+
+        response = self._send_request(url, "GET")
+        return response.get("results", [])
+
+    def xy_to_latlon(self, x_coord: float, y_coord: float):
+        url = f"https://www.onemap.gov.sg/api/common/convert/3414to4326?X={x_coord}&Y={y_coord}"
+
+        response = self._send_request(url, "GET")
+        return response
+
     def search(self, query: str) -> list[dict[str, Any]]:
         """
         Perform a search using the OneMap API for each row in the given DataFrame.
