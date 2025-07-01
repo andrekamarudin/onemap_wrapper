@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
+from typing import Any, Coroutine
 
 import requests
 from tqdm import tqdm
@@ -44,15 +45,22 @@ class OneMapAPI:
             )
         return self._headers
 
-    def search(self, query: str) -> list[dict]:
+    def search(self, query: str) -> list[dict[str, Any]]:
         """
         Perform a search using the OneMap API for each row in the given DataFrame.
         """
         url = f"https://www.onemap.gov.sg/api/common/elastic/search?searchVal={query}&returnGeom=Y&getAddrDetails=Y&pageNum=1"
-        result = self._send_request(url, "GET")
-        return result.get("results", [])
+        response: dict = self._send_request(url, "GET")
+        results: list[dict] = response.get("results", [])
+        results_with_query: list[dict[str, Any]] = [
+            {"query": query, **result} for result in results
+        ]
+        return results_with_query
 
-    async def search_async(self, queries: list[str]) -> list[dict[str, object]]:
+    def searches(
+        self,
+        queries: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
         """
         Perform asynchronous searches using the OneMap API for each query in the list.
         """
@@ -65,15 +73,19 @@ class OneMapAPI:
             position=0,
         )
 
-        def search_and_update(query: str) -> dict[str, object]:
-            results = self.search(query)
+        dict_of_results: dict[str, list[dict[str, Any]]] = {}
+
+        def _search(query: str):
+            results: list[dict[str, Any]] = self.search(query)
+            dict_of_results[query] = results
             qbar.update(1)
-            return {
-                "query": query,
-                "results": results,
-            }
 
-        tasks = [asyncio.to_thread(search_and_update, query) for query in queries]
-        results = await asyncio.gather(*tasks)
+        async def _async(queries: list[str]):
+            tasks: list[Coroutine] = [
+                asyncio.to_thread(_search, query) for query in queries
+            ]
+            await asyncio.gather(*tasks)
 
-        return results
+        asyncio.run(_async(queries))
+
+        return dict_of_results
