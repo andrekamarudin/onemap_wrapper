@@ -1,9 +1,9 @@
 # %%
 import json
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures._base import Future
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +11,10 @@ import requests
 from icecream import ic  # noqa
 from loguru import logger
 from tqdm import tqdm
+
+Result = dict[str, Any]
+ResultList = list[Result]
+Response = dict[str, ResultList | Any]
 
 
 @dataclass
@@ -78,29 +82,29 @@ class OneMapAPI:
             self._access_token_expiry = int(response["expiry_timestamp"])
         return self._access_token
 
-    def _reverse_search(self, url: str, **kwargs) -> list[dict[str, Any]]:
+    def _reverse_search(self, url: str, **kwargs) -> ResultList:
         kwargs = {"buffer": 40, "addressType": "All", "otherFeatures": "N", **kwargs}
         url += "&".join(f"{k}={v}" for k, v in kwargs.items())
         response = self._send_request(url, "GET")
         return response.get("results", [])
 
-    def search_xy(self, x_coord: float, y_coord: float) -> list[dict[str, Any]]:
+    def search_xy(self, x_coord: float, y_coord: float) -> ResultList:
         return self._reverse_search(
             f"{self.base_url}/public/revgeocodexy?", location=f"{x_coord},{y_coord}"
         )
 
-    def search_latlon(self, lat: float, lon: float) -> list[dict[str, Any]]:
+    def search_latlon(self, lat: float, lon: float) -> ResultList:
         return self._reverse_search(
             f"{self.base_url}/public/revgeocode?", location=f"{lat},{lon}"
         )
 
-    def xy_to_latlon(self, x_coord: float, y_coord: float):
+    def xy_to_latlon(self, x_coord: float, y_coord: float) -> Result:
         return self._convert("3414", "4326", X=x_coord, Y=y_coord)
 
-    def latlon_to_xy(self, lat: float, lon: float):
+    def latlon_to_xy(self, lat: float, lon: float) -> Result:
         return self._convert("4326", "3414", latitude=lat, longitude=lon)
 
-    def _convert(self, from_format: str, to_format: str, **kwargs) -> dict[str, Any]:
+    def _convert(self, from_format: str, to_format: str, **kwargs) -> Result:
         """
         Generic method to convert coordinates between specified coordinate reference systems.
         """
@@ -109,27 +113,29 @@ class OneMapAPI:
         response = self._send_request(url, "GET")
         return response
 
-    def search(self, query: str) -> list[dict[str, Any]]:
+    def search(self, query: str) -> ResultList:
         """
         Perform a search using the OneMap API for each row in the given DataFrame.
         """
         url = f"{self.base_url}/common/elastic/search?searchVal={query}&returnGeom=Y&getAddrDetails=Y&pageNum=1"
-        response: dict = self._send_request(url, "GET")
-        results: list[dict] = response.get("results", [])
-        results_with_query: list[dict[str, Any]] = [
+        response: Response = self._send_request(url, "GET")
+        results: ResultList = response.get("results", [])
+        results_with_query: ResultList = [
             {"query": query, **result} for result in results
         ]
         return results_with_query
 
     def searches(
         self, queries: list[str], max_workers: int = 5
-    ) -> dict[str, list[dict[str, Any]]]:
+    ) -> dict[str, ResultList]:
         """
         Perform parallel searches using a thread pool (no asyncio).
         """
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_query = {executor.submit(self.search, q): q for q in queries}
-            results: dict[str, list[dict[str, Any]]] = {}
+            future_to_query: dict[Future[ResultList], str] = {
+                executor.submit(self.search, q): q for q in queries
+            }
+            results: dict[str, ResultList] = {}
             for fut in tqdm(
                 as_completed(future_to_query),
                 total=len(queries),
