@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from icecream import ic  # noqa
 from loguru import logger
 from tqdm import tqdm
 
