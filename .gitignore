@@ -1,1 +1,3 @@
 onemap/__pycache__/
+**/*.cpython-313.pyc
+**/*.pyc

@@ -1,85 +1,83 @@
-import types
-from typing import ClassVar, Generic, Type, TypeVar
+from dataclasses import dataclass
+from typing import Any, ClassVar, Generic, Type, TypeVar
 
 import httpx
 from pydantic import BaseModel
 
+ResponseDict = dict[str, Any]
+
+
+@dataclass
+class BaseClient:
+    """HTTP client for API methods."""
+
+    _client: httpx.Client | None = None
+    _token: str | None = None
+    _base_url: str | None = None
+
+    def set_credentials(self, token: str):
+        self._token = token
+        if self._base_url is None:
+            raise ValueError("Base URL must be set before setting credentials")
+        self._client = httpx.Client(
+            base_url=self._base_url, headers={"Authorization": self._token}
+        )
+
+    def _request(self, method: str, endpoint: str, **kwargs) -> ResponseDict:
+        """Make an HTTP request to the API."""
+        if self._client is None:
+            raise RuntimeError("Credentials not set. Call set_credentials() first.")
+        response = self._client.request(method, endpoint, **kwargs)
+        response.raise_for_status()
+        return response.json()
+
+    def get(self, endpoint: str, **kwargs) -> ResponseDict:
+        return self._request("GET", endpoint, **kwargs)
+
+    def post(self, endpoint: str, **kwargs) -> ResponseDict:
+        return self._request("POST", endpoint, **kwargs)
+
+    def put(self, endpoint: str, **kwargs) -> ResponseDict:
+        return self._request("PUT", endpoint, **kwargs)
+
+    def delete(self, endpoint: str, **kwargs) -> ResponseDict:
+        return self._request("DELETE", endpoint, **kwargs)
+
+
 T = TypeVar("T", bound="BaseAPIModel")
-
-_client = None
-_token = None
-_base_url = "http://localhost:8000"
-
-
-def set_credentials(token: str):
-    global _client, _token, _base_url
-    _token = token
-    _client = httpx.Client(
-        base_url=_base_url, headers={"Authorization": f"Bearer {_token}"}
-    )
-
-
-def request(method: str, endpoint: str, **kwargs) -> httpx.Response:
-    if _client is None:
-        raise RuntimeError("Credentials not set. Call set_credentials() first.")
-    response = _client.request(method, endpoint, **kwargs)
-    response.raise_for_status()
-    return response
-
-
-def get(endpoint: str, params: dict | None = None) -> httpx.Response:
-    return request("GET", endpoint, params=params)
-
-
-def post(endpoint: str, json: dict | None = None) -> httpx.Response:
-    return request("POST", endpoint, json=json)
-
-
-def put(endpoint: str, json: dict | None = None) -> httpx.Response:
-    return request("PUT", endpoint, json=json)
-
-
-def delete(endpoint: str) -> httpx.Response:
-    return request("DELETE", endpoint)
-
-
-client = types.SimpleNamespace(
-    get=get,
-    post=post,
-    put=put,
-    delete=delete,
-)
 
 
 class BaseAPIModel(BaseModel, Generic[T]):
+    api_client: ClassVar[BaseClient]
     id: str | None = None
     _resource_path: ClassVar[str] = ""
 
-    def save(self) -> None:
+    def save(self) -> ResponseDict:
+        """Save the model instance to the API."""
         data = self.model_dump(exclude_unset=True)
         if self.id:
-            response = client.put(f"/{self._resource_path}/{self.id}", json=data)
+            response = self.api_client.put(
+                f"/{self._resource_path}/{self.id}", json=data
+            )
         else:
-            response = client.post(f"/{self._resource_path}", json=data)
-        response.raise_for_status()
-        self.id = response.json()["id"]
+            response = self.api_client.post(f"/{self._resource_path}", json=data)
+        self.id = response["id"]
+        return response
 
-    def delete(self) -> None:
+    def delete(self) -> ResponseDict:
+        """Delete the model instance from the API."""
         if not self.id:
             raise ValueError("Cannot delete unsaved resource.")
-        response = client.delete(f"/{self._resource_path}/{self.id}")
-        response.raise_for_status()
+        return self.api_client.delete(f"/{self._resource_path}/{self.id}")
 
     @classmethod
     def load(cls: Type[T], resource_id: str) -> T:
-        response = client.get(f"/{cls._resource_path}/{resource_id}")
-        if response.status_code == 404:
-            raise ValueError(f"{cls.__name__} not found.")
-        response.raise_for_status()
-        return cls(**response.json())
+        """Load a resource by its ID."""
+        response = cls.api_client.get(f"/{cls._resource_path}/{resource_id}")
+        return cls(**response)
 
     @classmethod
     def find(cls: Type[T]) -> list[T]:
-        response = client.get(f"/{cls._resource_path}")
-        response.raise_for_status()
-        return [cls(**item) for item in response.json()]
+        """Find all resources of this type."""
+        response: ResponseDict = cls.api_client.get(f"/{cls._resource_path}")
+        return [cls(**response)]
